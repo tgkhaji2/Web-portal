@@ -56,7 +56,7 @@ const processImage = async (req, res, next) => {
       .webp({ quality: 80 })
       .toFile(filePath);
 
-    // Store image URL in request object
+    // Store image URL in request object without /api prefix
     req.imageUrl = `/images/${fileName}`;
 
     next();

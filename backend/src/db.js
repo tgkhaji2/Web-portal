@@ -1,5 +1,9 @@
 const mysql = require("mysql2/promise");
 const bcrypt = require("bcrypt");
+const dotenv = require("dotenv");
+
+// Load environment variables
+dotenv.config();
 
 const DB_HOST = process.env.DB_HOST || "127.0.0.1";
 const DB_PORT = process.env.DB_PORT ? Number(process.env.DB_PORT) : 3306;
@@ -11,6 +15,14 @@ let pool;
 
 async function initDb() {
   if (pool) return pool;
+
+  console.log('DB Config:', {
+    host: DB_HOST,
+    port: DB_PORT,
+    user: DB_USER,
+    password: DB_PASSWORD ? '***' : 'EMPTY',
+    database: DB_NAME
+  });
 
   const connection = await mysql.createConnection({
     host: DB_HOST,

@@ -10,6 +10,7 @@ const initialNewsForm = {
   categoryId: "",
   status: "published",
   published_at: "",
+  image: null,
 };
 
 export default function AdminPanel() {
@@ -20,8 +21,11 @@ export default function AdminPanel() {
   const [categories, setCategories] = useState([]);
   const [newsList, setNewsList] = useState([]);
   const [newsForm, setNewsForm] = useState(initialNewsForm);
+  const [editingNewsId, setEditingNewsId] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
   const [newCategory, setNewCategory] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [deleteModal, setDeleteModal] = useState({ show: false, newsId: null, title: "" });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -36,10 +40,16 @@ export default function AdminPanel() {
     loadAdminData();
   }, [token]);
 
-  const authHeaders = () => ({
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  });
+  const authHeaders = (json = true) => {
+    const headers = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+    if (json) {
+      headers["Content-Type"] = "application/json";
+    }
+    return headers;
+  };
 
   const handleError = async (response) => {
     if (response.status === 401) {
@@ -53,9 +63,21 @@ export default function AdminPanel() {
   const loadAdminData = async () => {
     try {
       setErrorMessage("");
+      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+
+      if (token) {
+        const profileRes = await fetch(`${API_BASE}/auth/me`, { headers });
+        if (profileRes.ok) {
+          const profile = await profileRes.json();
+          setUser(profile.user);
+        } else {
+          await handleError(profileRes);
+        }
+      }
+
       const [categoriesRes, newsRes] = await Promise.all([
-        fetch(`${API_BASE}/categories`),
-        fetch(`${API_BASE}/news`),
+        fetch(`${API_BASE}/categories`, { headers }),
+        fetch(`${API_BASE}/news`, { headers }),
       ]);
 
       if (!categoriesRes.ok) await handleError(categoriesRes);
@@ -124,7 +146,59 @@ export default function AdminPanel() {
     }
   };
 
-  const addNews = async (event) => {
+  const handleImageChange = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      setNewsForm({ ...newsForm, image: file });
+      const reader = new FileReader();
+      reader.onload = (e) => setImagePreview(e.target.result);
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const confirmDelete = (newsId, title) => {
+    setDeleteModal({ show: true, newsId, title });
+  };
+
+  const deleteNews = async () => {
+    try {
+      setErrorMessage("");
+      const response = await fetch(`${API_BASE}/news/${deleteModal.newsId}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+      if (!response.ok) await handleError(response);
+      setNewsList((prev) => prev.filter((item) => item.id !== deleteModal.newsId));
+      setDeleteModal({ show: false, newsId: null, title: "" });
+      setStatusMessage("Berita berhasil dihapus.");
+    } catch (error) {
+      setErrorMessage(error.message);
+    }
+  };
+
+  const resetNewsForm = () => {
+    setNewsForm(initialNewsForm);
+    setImagePreview(null);
+    setEditingNewsId(null);
+  };
+
+  const handleEdit = (item) => {
+    setErrorMessage("");
+    setStatusMessage("");
+    setEditingNewsId(item.id);
+    setNewsForm({
+      title: item.title,
+      body: item.body,
+      author: item.author,
+      categoryId: item.category_id || item.categoryId || "",
+      status: item.status || "published",
+      published_at: item.published_at ? new Date(item.published_at).toISOString().slice(0, 16) : "",
+      image: null,
+    });
+    setImagePreview(item.image_url || null);
+  };
+
+  const saveNews = async (event) => {
     event.preventDefault();
     if (!newsForm.title.trim() || !newsForm.body.trim() || !newsForm.author.trim() || !newsForm.categoryId) {
       setErrorMessage("Semua field berita harus diisi.");
@@ -133,25 +207,34 @@ export default function AdminPanel() {
 
     try {
       setErrorMessage("");
-      const payload = {
-        title: newsForm.title.trim(),
-        body: newsForm.body.trim(),
-        author: newsForm.author.trim(),
-        category_id: Number(newsForm.categoryId),
-        status: newsForm.status,
-        published_at: newsForm.published_at || new Date().toISOString(),
-      };
+      const formData = new FormData();
+      formData.append("title", newsForm.title.trim());
+      formData.append("body", newsForm.body.trim());
+      formData.append("author", newsForm.author.trim());
+      formData.append("category_id", Number(newsForm.categoryId));
+      formData.append("status", newsForm.status);
+      formData.append("published_at", newsForm.published_at || new Date().toISOString());
+      if (newsForm.image) {
+        formData.append("image", newsForm.image);
+      }
 
-      const response = await fetch(`${API_BASE}/news`, {
-        method: "POST",
-        headers: authHeaders(),
-        body: JSON.stringify(payload),
+      const response = await fetch(`${API_BASE}/news${editingNewsId ? `/${editingNewsId}` : ""}`, {
+        method: editingNewsId ? "PUT" : "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
       });
       if (!response.ok) await handleError(response);
-      const created = await response.json();
-      setNewsList((prev) => [created, ...prev]);
-      setNewsForm(initialNewsForm);
-      setStatusMessage("Berita baru berhasil ditambahkan.");
+      const result = await response.json();
+
+      if (editingNewsId) {
+        setNewsList((prev) => prev.map((item) => (item.id === result.id ? result : item)));
+        setStatusMessage("Berita berhasil diperbarui.");
+      } else {
+        setNewsList((prev) => [result, ...prev]);
+        setStatusMessage("Berita baru berhasil ditambahkan.");
+      }
+
+      resetNewsForm();
     } catch (error) {
       setErrorMessage(error.message);
     }
@@ -239,7 +322,7 @@ export default function AdminPanel() {
 
             <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
               <h2 className="text-2xl font-semibold text-slate-900">Tambah berita</h2>
-              <form onSubmit={addNews} className="mt-6 space-y-5">
+              <form onSubmit={saveNews} className="mt-6 space-y-5">
                 <label className="block">
                   <span className="text-sm font-medium text-slate-700">Judul berita</span>
                   <input
@@ -259,15 +342,6 @@ export default function AdminPanel() {
                   />
                 </label>
                 <label className="block">
-                  <span className="text-sm font-medium text-slate-700">Penulis</span>
-                  <input
-                    type="text"
-                    value={newsForm.author}
-                    onChange={(event) => setNewsForm({ ...newsForm, author: event.target.value })}
-                    className="mt-2 w-full rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
-                  />
-                </label>
-                <label className="block">
                   <span className="text-sm font-medium text-slate-700">Kategori</span>
                   <select
                     value={newsForm.categoryId}
@@ -281,6 +355,29 @@ export default function AdminPanel() {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="block">
+                  <span className="text-sm font-medium text-slate-700">Penulis</span>
+                  <input
+                    type="text"
+                    value={newsForm.author}
+                    onChange={(event) => setNewsForm({ ...newsForm, author: event.target.value })}
+                    className="mt-2 w-full rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-sm font-medium text-slate-700">Gambar berita (opsional)</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageChange}
+                    className="mt-2 w-full rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+                  />
+                  {imagePreview && (
+                    <div className="mt-3">
+                      <img src={imagePreview} alt="Preview" className="h-32 w-auto rounded-lg object-cover" />
+                    </div>
+                  )}
                 </label>
                 <div className="grid gap-5 sm:grid-cols-2">
                   <label className="block">
@@ -304,9 +401,20 @@ export default function AdminPanel() {
                     />
                   </label>
                 </div>
-                <button type="submit" className="inline-flex items-center justify-center rounded-full bg-cyan-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-cyan-500">
-                  Simpan berita
-                </button>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <button type="submit" className="inline-flex items-center justify-center rounded-full bg-cyan-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-cyan-500">
+                    {editingNewsId ? "Perbarui berita" : "Simpan berita"}
+                  </button>
+                  {editingNewsId && (
+                    <button
+                      type="button"
+                      onClick={resetNewsForm}
+                      className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Batal edit
+                    </button>
+                  )}
+                </div>
               </form>
             </div>
           </div>
@@ -327,15 +435,46 @@ export default function AdminPanel() {
               </ul>
             </div>
             <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
-              <h2 className="text-2xl font-semibold text-slate-900">Berita terbaru</h2>
-              <div className="mt-6 space-y-3 text-slate-700">
+              <h2 className="text-2xl font-semibold text-slate-900">Kelola Berita</h2>
+              <div className="mt-6">
                 {newsList.length > 0 ? (
-                  newsList.map((item) => (
-                    <div key={item.id} className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
-                      <p className="text-sm font-semibold text-slate-900">{item.title}</p>
-                      <p className="mt-1 text-xs text-slate-500">{item.category_name} • {item.author} • {new Date(item.published_at).toLocaleString()}</p>
-                    </div>
-                  ))
+                  <div className="overflow-x-auto">
+                    <table className="w-full table-auto">
+                      <thead>
+                        <tr className="border-b border-slate-200">
+                              <th className="px-4 py-2 text-left text-sm font-semibold text-slate-700">Judul</th>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-slate-700">Kategori</th>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-slate-700">Status</th>
+                          <th className="px-4 py-2 text-left text-sm font-semibold text-slate-700">Tanggal</th>
+                          <th className="px-4 py-2 text-center text-sm font-semibold text-slate-700">Aksi</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {newsList.map((item) => (
+                          <tr key={item.id} className="border-b border-slate-100">
+                            <td className="px-4 py-3 text-sm text-slate-900">{item.title}</td>
+                            <td className="px-4 py-3 text-sm text-slate-600">{item.category_name || "-"}</td>
+                            <td className="px-4 py-3 text-sm text-slate-600">{item.status}</td>
+                            <td className="px-4 py-3 text-sm text-slate-600">{new Date(item.published_at).toLocaleDateString()}</td>
+                            <td className="px-4 py-3 text-center">
+                              <button 
+                                onClick={() => handleEdit(item)}
+                                className="mr-2 rounded-full bg-blue-600 px-3 py-1 text-xs font-semibold text-white hover:bg-blue-500"
+                              >
+                                Edit
+                              </button>
+                              <button 
+                                onClick={() => confirmDelete(item.id, item.title)}
+                                className="rounded-full bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 ) : (
                   <p className="text-slate-500">Belum ada berita.</p>
                 )}
@@ -343,6 +482,31 @@ export default function AdminPanel() {
             </div>
           </div>
         </section>
+      )}
+
+      {deleteModal.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-lg">
+            <h3 className="text-lg font-semibold text-slate-900">Konfirmasi Hapus</h3>
+            <p className="mt-2 text-sm text-slate-600">
+              Apakah Anda yakin ingin menghapus berita "{deleteModal.title}"? Tindakan ini tidak dapat dibatalkan.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteModal({ show: false, newsId: null, title: "" })}
+                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Batal
+              </button>
+              <button
+                onClick={deleteNews}
+                className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500"
+              >
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );
